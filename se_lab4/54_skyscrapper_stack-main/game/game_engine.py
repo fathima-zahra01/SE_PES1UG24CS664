@@ -1,4 +1,10 @@
 import random
+PERFECT_TOLERANCE = 6      # px offset still counted as perfect
+PERFECT_BONUS = 2
+MAX_BONUS = 10
+STREAK_FOR_RESTORE = 2     # perfects in a row before width is restored
+WIDTH_RESTORE = 10
+POPUP_FRAMES = 60
 import pygame
 from game.block import Block
 
@@ -30,6 +36,12 @@ class GameEngine:
     def reset(self):
         self.score = 0
         self.game_over = False
+        self.bonus = 0
+        self.perfect_streak = 0
+        self.popup_text = ""
+        self.popup_timer = 0
+        self.popup_x = 0
+        self.popup_y = 0
 
         base_x = (self.width - self.base_width) // 2
         base_y = self.height - 60
@@ -47,34 +59,60 @@ class GameEngine:
         start_x = 25 if random.choice([True, False]) else self.width - 25 - top_block.width
         self.active_block = Block(start_x, next_y, top_block.width, self.block_height, color, speed=speed)
 
-    def drop_block(self):
-        if self.game_over:
-            return
+   def drop_block(self):
+    if self.game_over:
+        return
 
-        top_block = self.stack[-1]
-        act = self.active_block
+    top_block = self.stack[-1]
+    act = self.active_block
 
-        left = max(act.x, top_block.x)
-        right = min(act.x + act.width, top_block.x + top_block.width)
-        overlap = right - left
-        
-        is_successful_drop = overlap > 0
-        
-        if is_successful_drop:
-            trimmed_width = max(10.0, overlap)
-            new_block = Block(left, act.y, trimmed_width, self.block_height, act.color, speed=0)
-            self.stack.append(new_block)
-            self.score += 1
+    left = max(act.x, top_block.x)
+    right = min(act.x + act.width, top_block.x + top_block.width)
+    overlap = right - left
 
-            if new_block.y < 180:
-                shift_amount = self.block_height + 4
-                for b in self.stack:
-                    b.y += shift_amount
+    if overlap <= 0:                      # complete miss
+        self.game_over = True
+        self.perfect_streak = 0
+        return
 
-            self.spawn_active_block()
-        else:
-            self.game_over = True
+    offset = abs(act.x - top_block.x)
 
+    if offset <= PERFECT_TOLERANCE:       # PERFECT: snap, no trimming
+        self.perfect_streak += 1
+        new_x = top_block.x
+        new_w = top_block.width
+
+        if self.perfect_streak >= STREAK_FOR_RESTORE:   # restore width
+            grow = min(WIDTH_RESTORE, self.base_width - new_w)
+            if grow > 0:
+                new_x -= grow / 2
+                new_w += grow
+                new_x = max(20, min(new_x, self.width - 20 - new_w))
+
+        bonus = min(MAX_BONUS, PERFECT_BONUS * self.perfect_streak)
+        self.bonus += bonus
+        self.popup_text = "PERFECT!" if self.perfect_streak == 1 else f"PERFECT! x{self.perfect_streak}  +{bonus}"
+        self.popup_timer = POPUP_FRAMES
+    else:                                 # normal: trim to overlap
+        self.perfect_streak = 0
+        new_x = left
+        new_w = overlap
+
+    new_block = Block(new_x, act.y, new_w, self.block_height, act.color, speed=0)
+    self.stack.append(new_block)
+    self.score += 1
+
+    if new_block.y < 180:
+        shift_amount = self.block_height + 4
+        for b in self.stack:
+            b.y += shift_amount
+
+    self.popup_x = new_block.x + new_block.width / 2
+    self.popup_y = new_block.y - 10
+
+    self.spawn_active_block()
+
+       
     def handle_event(self, event):
         if self.game_over:
             if (event.type == pygame.KEYDOWN and event.key == pygame.K_r) or \
@@ -90,6 +128,8 @@ class GameEngine:
     def update(self):
         if not self.game_over:
             self.active_block.update(self.width)
+        if self.popup_timer > 0:
+            self.popup_timer -= 1
 
     def render(self, screen):
         screen.fill((24, 27, 36))
@@ -97,7 +137,7 @@ class GameEngine:
         title_surf = self.font_title.render("Skyscraper Stack", True, (245, 245, 245))
         screen.blit(title_surf, (self.width // 2 - title_surf.get_width() // 2, 16))
 
-        score_surf = self.font_hud.render(f"Height: {self.score}", True, (255, 220, 80))
+        score_surf = self.font_hud.render(f"Height: {self.score}    Bonus: {self.bonus}", True, (255, 220, 80))
         screen.blit(score_surf, (self.width // 2 - score_surf.get_width() // 2, 54))
 
         for b in self.stack:
@@ -105,6 +145,12 @@ class GameEngine:
 
         if not self.game_over:
             self.active_block.render(screen)
+            if self.popup_timer > 0:
+                age = POPUP_FRAMES - self.popup_timer
+                alpha = int(255 * self.popup_timer / POPUP_FRAMES)
+                surf = self.font_hud.render(self.popup_text, True, (255, 235, 90))
+                surf.set_alpha(alpha)
+                screen.blit(surf, (self.popup_x - surf.get_width() // 2, self.popup_y - age * 0.8))
 
         if self.game_over:
             overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
