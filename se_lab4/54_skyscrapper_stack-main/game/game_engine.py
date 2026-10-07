@@ -1,10 +1,12 @@
 # ============================================================
 # game/game_engine.py
 # Task 2 applied: Perfect Placement bonus + width restoration + popup
+# Task 3 applied: Falling off-cut debris animation
 # ============================================================
 import random
 import pygame
 from game.block import Block
+from game.debris import Debris        # TASK 3
 
 PERFECT_TOLERANCE = 6      # px offset still counted as perfect
 PERFECT_BONUS = 2
@@ -39,7 +41,7 @@ class GameEngine:
         return palette[index % len(palette)]
 
     # ------------------------------------------------------------
-    # TASK 2: reset() initializes all perfect/bonus/popup state
+    # TASK 2 + TASK 3: reset() clears perfect/popup state AND debris
     # ------------------------------------------------------------
     def reset(self):
         self.score = 0
@@ -50,6 +52,9 @@ class GameEngine:
         self.popup_timer = 0
         self.popup_x = 0
         self.popup_y = 0
+
+        # TASK 3: fresh debris list each round
+        self.debris = []
 
         base_x = (self.width - self.base_width) // 2
         base_y = self.height - 60
@@ -70,8 +75,7 @@ class GameEngine:
                                   self.block_height, color, speed=speed)
 
     # ------------------------------------------------------------
-    # TASK 2: drop_block with perfect detection, snapping,
-    # streak tracking, bonus scoring, width restoration, popup text
+    # TASK 2 + TASK 3: drop_block now spawns debris on trim
     # ------------------------------------------------------------
     def drop_block(self):
         if self.game_over:
@@ -93,12 +97,12 @@ class GameEngine:
         offset = abs(act.x - top_block.x)
 
         # ---------------- TASK 2: PERFECT branch ----------------
-        if offset <= PERFECT_TOLERANCE:       # PERFECT: snap, no trimming
+        if offset <= PERFECT_TOLERANCE:       # snap, no trimming
             self.perfect_streak += 1
             new_x = top_block.x
             new_w = top_block.width
 
-            if self.perfect_streak >= STREAK_FOR_RESTORE:   # restore width
+            if self.perfect_streak >= STREAK_FOR_RESTORE:
                 grow = min(WIDTH_RESTORE, self.base_width - new_w)
                 if grow > 0:
                     new_x -= grow / 2
@@ -110,21 +114,43 @@ class GameEngine:
             self.popup_text = ("PERFECT!" if self.perfect_streak == 1
                                else f"PERFECT! x{self.perfect_streak}  +{bonus}")
             self.popup_timer = POPUP_FRAMES
+
         # ---------------- Normal trim branch ----------------
         else:
             self.perfect_streak = 0
             new_x = left
             new_w = overlap
 
+            # ---- TASK 3: spawn debris for the trimmed-off overhang ----
+            # Left overhang (the part of the active block left of new_x)
+            if act.x < new_x:
+                self.debris.append(Debris(
+                    act.x, act.y,
+                    new_x - act.x, act.height,
+                    act.color, side=-1
+                ))
+
+            # Right overhang (the part right of new_x + new_w)
+            if act.x + act.width > new_x + new_w:
+                self.debris.append(Debris(
+                    new_x + new_w, act.y,
+                    (act.x + act.width) - (new_x + new_w), act.height,
+                    act.color, side=+1
+                ))
+
         new_block = Block(new_x, act.y, new_w, self.block_height,
                           act.color, speed=0)
         self.stack.append(new_block)
         self.score += 1
 
+        # Camera scroll
         if new_block.y < 180:
             shift_amount = self.block_height + 4
             for b in self.stack:
                 b.y += shift_amount
+            # TASK 3: scroll active debris with the camera too
+            for d in self.debris:
+                d.y += shift_amount
 
         self.popup_x = new_block.x + new_block.width / 2
         self.popup_y = new_block.y - 10
@@ -144,16 +170,23 @@ class GameEngine:
             self.drop_block()
 
     # ------------------------------------------------------------
-    # TASK 2: update() ticks the popup timer
+    # TASK 2 + TASK 3: update() ticks popup AND advances debris
     # ------------------------------------------------------------
     def update(self):
         if not self.game_over:
             self.active_block.update(self.width)
+
+        # TASK 2: popup timer
         if self.popup_timer > 0:
             self.popup_timer -= 1
 
+        # TASK 3: gravity + culling for debris
+        for d in self.debris:
+            d.update(gravity=0.55, floor=self.height)
+        self.debris = [d for d in self.debris if d.alive]
+
     # ------------------------------------------------------------
-    # TASK 2: render() draws the popup with fade-out
+    # TASK 2 + TASK 3: render() draws stack, debris, active, popup
     # ------------------------------------------------------------
     def render(self, screen):
         screen.fill((24, 27, 36))
@@ -169,13 +202,18 @@ class GameEngine:
         screen.blit(score_surf,
                     (self.width // 2 - score_surf.get_width() // 2, 54))
 
+        # Stack blocks
         for b in self.stack:
             b.render(screen)
+
+        # TASK 3: debris renders behind the active block
+        for d in self.debris:
+            d.render(screen)
 
         if not self.game_over:
             self.active_block.render(screen)
 
-            # ---- TASK 2 popup render ----
+            # TASK 2: popup with fade
             if self.popup_timer > 0 and self.popup_text:
                 age = POPUP_FRAMES - self.popup_timer
                 alpha = max(0, min(255,
